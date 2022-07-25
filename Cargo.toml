@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 bitcoin = "0.27.1"
 cxx = "1.0"
-drivechain = { git = "https://github.com/nchashch/drivechain", rev = "07b159469a03362b1aafd7b363323e712385c1b5" }
+drivechain = { git = "https://github.com/nchashch/drivechain", rev = "5301b0d38273bf8a0a1aa2c42106f0283323a3e0" }
 thiserror = "1.0.31"
 hex = "0.4.3"
 
