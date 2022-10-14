@@ -1,6 +1,5 @@
-use drivechain as drive;
 use bitcoin::hash_types::{BlockHash, TxMerkleNode};
-use bitcoin::hashes::hex::ToHex;
+use drivechain as drive;
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -26,24 +25,41 @@ mod ffi {
         main_fee: u64,
         amount: u64,
     }
+    #[derive(Debug)]
+    struct Refund {
+        outpoint: String,
+        amount: u64,
+    }
+    #[derive(Debug)]
+    enum BMMState {
+        Succeded,
+        Failed,
+        Pending,
+    }
     extern "Rust" {
         type Drivechain;
         fn new_drivechain(
             db_path: &str,
             this_sidechain: usize,
+            main_host: &str,
+            main_port: u16,
             rpcuser: &str,
             rpcpassword: &str,
         ) -> Result<Box<Drivechain>>;
-        fn get_mainchain_tip(&self) -> Result<Vec<u8>>;
+        fn get_mainchain_tip(&self) -> Result<String>;
         fn get_prev_main_block_hash(&self, main_block_hash: &str) -> Result<Vec<u8>>;
-        fn confirm_bmm(&mut self) -> Result<Vec<Block>>;
-        fn attempt_bmm(&mut self, critical_hash: &str, block_data: &str, amount: u64)
-            -> Result<()>;
+        fn confirm_bmm(&mut self) -> Result<BMMState>;
+        fn attempt_bmm(
+            &mut self,
+            critical_hash: &str,
+            prev_main_block_hash: &str,
+            amount: u64,
+        ) -> Result<()>;
         fn connect_block(
             &mut self,
             deposits: Vec<Output>,
             withdrawals: Vec<Withdrawal>,
-            refunds: Vec<String>,
+            refunds: Vec<Refund>,
             just_check: bool,
         ) -> Result<bool>;
         fn disconnect_block(
@@ -72,46 +88,54 @@ pub struct Drivechain(drive::Drivechain);
 fn new_drivechain(
     db_path: &str,
     this_sidechain: usize,
+    main_host: &str,
+    main_port: u16,
     rpcuser: &str,
     rpcpassword: &str,
 ) -> Result<Box<Drivechain>, Error> {
-    let drivechain =
-        drive::Drivechain::new(db_path, this_sidechain, rpcuser.into(), rpcpassword.into())?;
+    let drivechain = drive::Drivechain::new(
+        db_path,
+        this_sidechain,
+        main_host,
+        main_port,
+        rpcuser.into(),
+        rpcpassword.into(),
+    )?;
     Ok(Box::new(Drivechain(drivechain)))
 }
 
 impl Drivechain {
-    fn get_mainchain_tip(&self) -> Result<Vec<u8>, Error> {
+    fn get_mainchain_tip(&self) -> Result<String, Error> {
         let tip = self.0.get_mainchain_tip()?;
-        Ok(tip.to_vec())
+        Ok(tip.to_string())
     }
     fn get_prev_main_block_hash(&self, main_block_hash: &str) -> Result<Vec<u8>, Error> {
         let main_block_hash = BlockHash::from_str(main_block_hash)?;
         let prev_hash = self.0.get_prev_main_block_hash(&main_block_hash)?;
         Ok(prev_hash.to_vec())
     }
-    fn confirm_bmm(&mut self) -> Result<Vec<ffi::Block>, Error> {
-        let block = self.0.confirm_bmm()?;
-        Ok(block
-            .map(|block| ffi::Block {
-                data: hex::encode(block.data),
-                time: block.time,
-                main_block_hash: block.main_block_hash.to_hex(),
+    fn confirm_bmm(&mut self) -> Result<ffi::BMMState, Error> {
+        self.0
+            .confirm_bmm()
+            .map_err(Error::Drive)
+            .map(|state| match state {
+                drivechain::BMMState::Succeded => ffi::BMMState::Succeded,
+                drivechain::BMMState::Failed => ffi::BMMState::Failed,
+                drivechain::BMMState::Pending => ffi::BMMState::Pending,
             })
-            .into_iter()
-            .collect())
     }
 
     fn attempt_bmm(
         &mut self,
         critical_hash: &str,
-        block_data: &str,
+        prev_main_block_hash: &str,
         amount: u64,
     ) -> Result<(), Error> {
         let critical_hash = TxMerkleNode::from_str(critical_hash)?;
-        let block_data = hex::decode(block_data)?;
+        let prev_main_block_hash = BlockHash::from_str(prev_main_block_hash)?;
         let amount = bitcoin::Amount::from_sat(amount);
-        self.0.attempt_bmm(&critical_hash, &block_data, amount)?;
+        self.0
+            .attempt_bmm(&critical_hash, &prev_main_block_hash, amount)?;
         Ok(())
     }
 
@@ -155,7 +179,7 @@ impl Drivechain {
         &mut self,
         deposits: Vec<ffi::Output>,
         withdrawals: Vec<ffi::Withdrawal>,
-        refunds: Vec<String>,
+        refunds: Vec<ffi::Refund>,
         just_check: bool,
     ) -> Result<bool, Error> {
         let deposits: Vec<drive::Deposit> = deposits
@@ -185,18 +209,13 @@ impl Drivechain {
             })
             .collect();
 
-        let refunds: Result<Vec<Vec<u8>>, Error> = refunds
+        let refunds: Result<HashMap<Vec<u8>, u64>, Error> = refunds
             .iter()
-            .map(|r| Ok(hex::decode(r)?.to_vec()))
+            .map(|r| Ok((hex::decode(&r.outpoint)?.to_vec(), r.amount)))
             .collect();
         Ok(self
             .0
-            .connect_block(
-                deposits.as_slice(),
-                &withdrawals?,
-                refunds?.as_slice(),
-                just_check,
-            )
+            .connect_block(deposits.as_slice(), &withdrawals?, &refunds?, just_check)
             .is_ok())
     }
 
