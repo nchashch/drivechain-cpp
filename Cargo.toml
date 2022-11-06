@@ -3,12 +3,13 @@ name = "drivechain-cpp"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+refund_amount_check = ["drivechain/refund_amount_check"]
 
 [dependencies]
 bitcoin = "0.29.1"
 cxx = "1.0"
-drivechain = { git = "https://github.com/nchashch/drivechain", rev = "fd750e0402153abcf1dceb4a3163a4e8cdfb42dc" }
+drivechain = { git = "https://github.com/nchashch/drivechain", rev = "db1c2e39d550ed6a6256f84e82899c3845d30ef0" }
 thiserror = "1.0.31"
 hex = "0.4.3"
 
