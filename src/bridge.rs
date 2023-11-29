@@ -1,5 +1,6 @@
 use bitcoin::hash_types::{BlockHash, TxMerkleNode};
 use drivechain as drive;
+use miette::{IntoDiagnostic as _, Result};
 use std::collections::HashMap;
 use std::str::FromStr;
 
@@ -92,7 +93,7 @@ fn new_drivechain(
     main_port: u16,
     rpcuser: &str,
     rpcpassword: &str,
-) -> Result<Box<Drivechain>, Error> {
+) -> Result<Box<Drivechain>> {
     let drivechain = drive::Drivechain::new(
         db_path,
         this_sidechain,
@@ -100,29 +101,33 @@ fn new_drivechain(
         main_port,
         rpcuser.into(),
         rpcpassword.into(),
-    )?;
+    )
+    .into_diagnostic()?;
     Ok(Box::new(Drivechain(drivechain)))
 }
 
 impl Drivechain {
-    fn get_mainchain_tip(&self) -> Result<String, Error> {
-        let tip = self.0.get_mainchain_tip()?;
+    fn get_mainchain_tip(&self) -> Result<String> {
+        let tip = self.0.get_mainchain_tip().into_diagnostic()?;
         Ok(tip.to_string())
     }
-    fn get_prev_main_block_hash(&self, main_block_hash: &str) -> Result<Vec<u8>, Error> {
-        let main_block_hash = BlockHash::from_str(main_block_hash)?;
-        let prev_hash = self.0.get_prev_main_block_hash(&main_block_hash)?;
+    fn get_prev_main_block_hash(&self, main_block_hash: &str) -> Result<Vec<u8>> {
+        let main_block_hash = BlockHash::from_str(main_block_hash).into_diagnostic()?;
+        let prev_hash = self
+            .0
+            .get_prev_main_block_hash(&main_block_hash)
+            .into_diagnostic()?;
         Ok(prev_hash.to_vec())
     }
-    fn confirm_bmm(&mut self) -> Result<ffi::BMMState, Error> {
+    fn confirm_bmm(&mut self) -> Result<ffi::BMMState> {
         self.0
             .confirm_bmm()
-            .map_err(Error::Drive)
             .map(|state| match state {
                 drivechain::BMMState::Succeded => ffi::BMMState::Succeded,
                 drivechain::BMMState::Failed => ffi::BMMState::Failed,
                 drivechain::BMMState::Pending => ffi::BMMState::Pending,
             })
+            .into_diagnostic()
     }
 
     fn attempt_bmm(
@@ -130,32 +135,34 @@ impl Drivechain {
         critical_hash: &str,
         prev_main_block_hash: &str,
         amount: u64,
-    ) -> Result<(), Error> {
-        let critical_hash = TxMerkleNode::from_str(critical_hash)?;
-        let prev_main_block_hash = BlockHash::from_str(prev_main_block_hash)?;
+    ) -> Result<()> {
+        let critical_hash = TxMerkleNode::from_str(critical_hash).into_diagnostic()?;
+        let prev_main_block_hash = BlockHash::from_str(prev_main_block_hash).into_diagnostic()?;
         let amount = bitcoin::Amount::from_sat(amount);
         self.0
-            .attempt_bmm(&critical_hash, &prev_main_block_hash, amount)?;
+            .attempt_bmm(&critical_hash, &prev_main_block_hash, amount)
+            .into_diagnostic()?;
         Ok(())
     }
 
-    fn is_main_block_connected(&self, main_block_hash: &str) -> Result<bool, Error> {
-        let main_block_hash = BlockHash::from_str(main_block_hash)?;
+    fn is_main_block_connected(&self, main_block_hash: &str) -> Result<bool> {
+        let main_block_hash = BlockHash::from_str(main_block_hash).into_diagnostic()?;
         self.0
             .is_main_block_connected(&main_block_hash)
-            .map_err(|err| err.into())
+            .into_diagnostic()
     }
 
-    fn verify_bmm(&self, main_block_hash: &str, critical_hash: &str) -> Result<bool, Error> {
-        let main_block_hash = BlockHash::from_str(main_block_hash)?;
-        let critical_hash = TxMerkleNode::from_str(critical_hash)?;
+    fn verify_bmm(&self, main_block_hash: &str, critical_hash: &str) -> Result<bool> {
+        let main_block_hash = BlockHash::from_str(main_block_hash).into_diagnostic()?;
+        let critical_hash = TxMerkleNode::from_str(critical_hash).into_diagnostic()?;
         Ok(self.0.verify_bmm(&main_block_hash, &critical_hash).is_ok())
     }
 
-    fn get_deposit_outputs(&self) -> Result<Vec<ffi::Output>, Error> {
+    fn get_deposit_outputs(&self) -> Result<Vec<ffi::Output>> {
         Ok(self
             .0
-            .get_deposit_outputs()?
+            .get_deposit_outputs()
+            .into_diagnostic()?
             .iter()
             .map(|output| ffi::Output {
                 address: output.address.clone(),
@@ -164,15 +171,15 @@ impl Drivechain {
             .collect())
     }
 
-    fn attempt_bundle_broadcast(&mut self) -> Result<(), Error> {
-        Ok(self.0.attempt_bundle_broadcast()?)
+    fn attempt_bundle_broadcast(&mut self) -> Result<()> {
+        Ok(self.0.attempt_bundle_broadcast().into_diagnostic()?)
     }
 
-    fn is_outpoint_spent(&self, outpoint: &str) -> Result<bool, Error> {
-        let outpoint = hex::decode(outpoint)?;
+    fn is_outpoint_spent(&self, outpoint: &str) -> Result<bool> {
+        let outpoint = hex::decode(outpoint).into_diagnostic()?;
         self.0
             .is_outpoint_spent(outpoint.as_slice())
-            .map_err(|err| err.into())
+            .into_diagnostic()
     }
 
     fn connect_block(
@@ -181,7 +188,7 @@ impl Drivechain {
         withdrawals: Vec<ffi::Withdrawal>,
         refunds: Vec<ffi::Refund>,
         just_check: bool,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool> {
         let deposits: Vec<drive::Deposit> = deposits
             .iter()
             .map(|output| drive::Deposit {
@@ -190,14 +197,14 @@ impl Drivechain {
             })
             .collect();
 
-        let withdrawals: Result<HashMap<Vec<u8>, drive::Withdrawal>, Error> = withdrawals
+        let withdrawals: Result<HashMap<Vec<u8>, drive::Withdrawal>> = withdrawals
             .into_iter()
             .map(|w| {
                 let mut dest: [u8; 20] = Default::default();
-                dest.copy_from_slice(hex::decode(w.main_address)?.as_slice());
+                dest.copy_from_slice(hex::decode(w.main_address).into_diagnostic()?.as_slice());
                 let mainchain_fee = w.main_fee;
                 Ok((
-                    hex::decode(w.outpoint)?,
+                    hex::decode(w.outpoint).into_diagnostic()?,
                     drive::Withdrawal {
                         amount: w.amount,
                         dest,
@@ -209,9 +216,14 @@ impl Drivechain {
             })
             .collect();
 
-        let refunds: Result<HashMap<Vec<u8>, u64>, Error> = refunds
+        let refunds: Result<HashMap<Vec<u8>, u64>> = refunds
             .iter()
-            .map(|r| Ok((hex::decode(&r.outpoint)?.to_vec(), r.amount)))
+            .map(|r| {
+                Ok((
+                    hex::decode(&r.outpoint).into_diagnostic()?.to_vec(),
+                    r.amount,
+                ))
+            })
             .collect();
         Ok(self
             .0
@@ -225,7 +237,7 @@ impl Drivechain {
         withdrawals: Vec<String>,
         refunds: Vec<String>,
         just_check: bool,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool> {
         let deposits: Vec<drive::Deposit> = deposits
             .iter()
             .map(|deposit| drive::Deposit {
@@ -233,13 +245,13 @@ impl Drivechain {
                 amount: deposit.amount,
             })
             .collect();
-        let withdrawals: Result<Vec<Vec<u8>>, Error> = withdrawals
+        let withdrawals: Result<Vec<Vec<u8>>> = withdrawals
             .iter()
-            .map(|o| Ok(hex::decode(o)?.to_vec()))
+            .map(|o| Ok(hex::decode(o).into_diagnostic()?.to_vec()))
             .collect();
-        let refunds: Result<Vec<Vec<u8>>, Error> = refunds
+        let refunds: Result<Vec<Vec<u8>>> = refunds
             .iter()
-            .map(|r| Ok(hex::decode(r)?.to_vec()))
+            .map(|r| Ok(hex::decode(r).into_diagnostic()?.to_vec()))
             .collect();
         Ok(self
             .0
@@ -256,12 +268,12 @@ impl Drivechain {
         self.0.format_deposit_address(address)
     }
 
-    fn get_new_mainchain_address(&self) -> Result<String, Error> {
-        let address = self.0.get_new_mainchain_address()?;
+    fn get_new_mainchain_address(&self) -> Result<String> {
+        let address = self.0.get_new_mainchain_address().into_diagnostic()?;
         Ok(address.to_string())
     }
 
-    fn create_deposit(&self, address: &str, amount: u64, fee: u64) -> Result<String, Error> {
+    fn create_deposit(&self, address: &str, amount: u64, fee: u64) -> Result<String> {
         self.0
             .create_deposit(
                 address,
@@ -269,35 +281,23 @@ impl Drivechain {
                 bitcoin::Amount::from_sat(fee),
             )
             .map(|txid| txid.to_string())
-            .map_err(|err| err.into())
+            .into_diagnostic()
     }
 
-    fn generate(&self, n: u64) -> Result<Vec<String>, Error> {
+    fn generate(&self, n: u64) -> Result<Vec<String>> {
         self.0
             .generate(n as usize)
             .map(|hashes| hashes.iter().map(|hash| hash.to_string()).collect())
-            .map_err(|err| err.into())
+            .into_diagnostic()
     }
 
-    fn flush(&mut self) -> Result<usize, Error> {
-        self.0.flush().map_err(|err| err.into())
+    fn flush(&mut self) -> Result<usize> {
+        self.0.flush().into_diagnostic()
     }
 }
 
-fn extract_mainchain_address_bytes(address: &str) -> Result<Vec<u8>, Error> {
-    let address = bitcoin::Address::from_str(&address)?;
-    let bytes = drive::Drivechain::extract_mainchain_address_bytes(&address)?;
+fn extract_mainchain_address_bytes(address: &str) -> Result<Vec<u8>> {
+    let address = bitcoin::Address::from_str(&address).into_diagnostic()?;
+    let bytes = drive::Drivechain::extract_mainchain_address_bytes(&address).into_diagnostic()?;
     Ok(bytes.to_vec())
-}
-
-#[derive(thiserror::Error, Debug)]
-enum Error {
-    #[error("drivechain error")]
-    Drive(#[from] drive::Error),
-    #[error("hex error")]
-    Hex(#[from] hex::FromHexError),
-    #[error("bitcoin hex error")]
-    BitcoinHex(#[from] bitcoin::hashes::hex::Error),
-    #[error("bitcoin address error")]
-    BitcoinAddress(#[from] bitcoin::util::address::Error),
 }
